@@ -98,6 +98,7 @@ class RaftNode:
             self.send_message(message, peer)
 
     def handle_request_vote(self, message):
+        print("sending response")
         response = {
             "src_ip": self.ip,
             "dst_ip": message["src_ip"],
@@ -109,12 +110,19 @@ class RaftNode:
             # Deny vote if candidate term is less than current term
             self.send_message(response, message["src_ip"])
             return
+        # print("HI")
         if self.voted_for is None or self.voted_for == message["src_ip"]:
+            print(self.log[-1]["term"])
+            print(message["last_log_term"])
+            print(len(self.log))
+            print(message["last_log_index"])
             # Grant vote if we haven't voted or if we have already voted for this candidate
             if self.log[-1]["term"] <= message["last_log_term"] and len(self.log) - 1 <= message["last_log_index"]:
+                print("Hello again")
                 # Grant vote if candidate's log is at least as up-to-date as our log
                 response["vote_granted"] = True
                 self.voted_for = message["src_ip"]
+                print("Hi HI")
         self.send_message(response, message["src_ip"])
 
     def handle_vote(self, message):

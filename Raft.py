@@ -268,6 +268,7 @@ class RaftNode:
                 "term": self.current_term,
                 "leader_commit": self.commit_index
             }
+            
             self.send_message(message, peer)
 
     def handle_heartbeat(self, message):

@@ -21,15 +21,17 @@ class RaftNode:
         self.commit_index = 0
         self.last_applied = 0
         self.state = "follower"
-        self.leader_ip = None
+        self.leader_port = None
         self.next_index = {peer: len(self.log) for peer in self.peers}
         self.match_index = {peer: 0 for peer in self.peers}
         self.election_timer = None
         self.heartbeat_timer = None
+        self.vote_count = 0
 
     def send_message(self, message, dest_port):
+        # print(message)
         payload = {
-            "src_ip": self.ip,
+            "src_port": self.port,
             "message": message
         }
         headers = {
@@ -46,8 +48,8 @@ class RaftNode:
         @app.route('/message', methods=['POST'])
         def receive_message():
             message = request.get_json()['message']
-            src_ip = request.get_json()['src_ip']
-            print(f"Received message from {src_ip}: {message}")
+            src_port = request.get_json()['src_port']
+            print(f"Received message from {src_port}: {message}")
             self.handle_message(message)
             return "OK", 200
         
@@ -73,23 +75,23 @@ class RaftNode:
             self.heartbeat_timer = None
 
     def start_election(self):
-        print(f"Node {self.ip}: Starting election")
+        print(f"Node {self.port}: Starting election")
         self.current_term += 1
         self.state = "candidate"
-        self.voted_for = self.ip
+        self.voted_for = self.port
         self.cancel_election_timer()
         self.start_election_timer()
         self.request_votes()
 
     def request_votes(self):
-        print(f"Node {self.ip}: Requesting votes")
+        print(f"Node {self.port}: Requesting votes")
         num_votes = 1
         for peer in self.peers:
             if peer == self.port:
                 continue
             message = {
-                "src_ip": self.ip,
-                "dst_ip": peer,
+                "src_port": self.port,
+                "dst_port": peer,
                 "type": "request_vote",
                 "term": self.current_term,
                 "last_log_index": len(self.log) - 1,
@@ -100,78 +102,94 @@ class RaftNode:
     def handle_request_vote(self, message):
         print("sending response")
         response = {
-            "src_ip": self.ip,
-            "dst_ip": message["src_ip"],
-            "type": "vote",
+            "src_port": self.port,
+            "dst_port": message["src_port"],
+            "type": "request_vote_response",
             "term": self.current_term,
             "vote_granted": False
         }
         if message["term"] < self.current_term:
             # Deny vote if candidate term is less than current term
-            self.send_message(response, message["src_ip"])
+            self.send_message(response, message["src_port"])
             return
         # print("HI")
-        if self.voted_for is None or self.voted_for == message["src_ip"]:
-            print(self.log[-1]["term"])
-            print(message["last_log_term"])
-            print(len(self.log))
-            print(message["last_log_index"])
+        if self.voted_for is None or self.voted_for == message["src_port"]:
+            # print(self.log[-1]["term"])
+            # print(message["last_log_term"])
+            # print(len(self.log))
+            # print(message["last_log_index"])
             # Grant vote if we haven't voted or if we have already voted for this candidate
             if self.log[-1]["term"] <= message["last_log_term"] and len(self.log) - 1 <= message["last_log_index"]:
-                print("Hello again")
+                # print("Hello again")
                 # Grant vote if candidate's log is at least as up-to-date as our log
                 response["vote_granted"] = True
-                self.voted_for = message["src_ip"]
-                print("Hi HI")
-        self.send_message(response, message["src_ip"])
+                print("Yes! Voted True")
+                self.voted_for = message["src_port"]
+                # print("Hi HI")
+                # print(message["src_port"])
+        self.send_message(response, message["src_port"])
 
-    def handle_vote(self, message):
-        if message["term"] != self.current_term:
-            return
-        if message["vote_granted"]:
-            num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
-            if num_votes > len(self.peers) // 2:
-                self.state = "leader"
-                self.leader_ip = self.ip
-                self.cancel_election_timer()
-                self.start_heartbeat_timer()
-                self.send_append_entries()
+    # def handle_vote(self, message):
+    #     if message["term"] != self.current_term:
+    #         return
+    #     if message["vote_granted"]:
+    #         num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
+    #         if num_votes > len(self.peers) // 2:
+    #             self.state = "leader"
+    #             self.leader_port = self.port
+    #             self.cancel_election_timer()
+    #             self.start_heartbeat_timer()
+    #             self.send_append_entries()
     
     def handle_request_vote_response(self, message):
         # Check if the response is for the current term
+        print(message['term'])
+        print(self.current_term)
         if message['term'] != self.current_term:
             return
 
         # Check if the response is from a valid candidate
-        candidate_id = message['from']
+        candidate_id = message['src_port']
         if candidate_id not in self.peers:
             return
 
+        # print("Hi")
         # Check if the candidate has already voted in this term
         if candidate_id in self.voted_for:
             return
-
-        # Check if the candidate has granted its vote
-        if message['vote_granted']:
+        print(message)
+        if message["vote_granted"]:
+            print("vote_granted")
+            # num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
             self.vote_count += 1
+            print(self.vote_count)
             if self.vote_count > len(self.peers) // 2:
-                # The node has received enough votes to become leader
-                self.become_leader()
-        else:
-            # The candidate did not grant its vote
-            pass  # Handle the case where a candidate did not grant its vote
+                self.state = "leader"
+                self.leader_port = self.port
+                self.cancel_election_timer()
+                self.start_heartbeat_timer()
+                self.send_append_entries()
+        # # Check if the candidate has granted its vote
+        # if message['vote_granted']:
+        #     self.vote_count += 1
+        #     if self.vote_count > len(self.peers) // 2:
+        #         # The node has received enough votes to become leader
+        #         self.become_leader()
+        # else:
+        #     # The candidate did not grant its vote
+        #     pass  # Handle the case where a candidate did not grant its vote
 
 
     def send_append_entries(self):
         for peer in self.peers:
-            if peer == self.ip:
+            if peer == self.port:
                 continue
             prev_log_index = self.next_index[peer] - 1
             prev_log_term = self.log[prev_log_index]["term"] if prev_log_index >= 0 else 0
             entries = self.log[self.next_index[peer]:]
             message = {
-                "src_ip": self.ip,
-                "dst_ip": peer,
+                "src_port": self.port,
+                "dst_port": peer,
                 "type": "append_entries",
                 "term": self.current_term,
                 "prev_log_index": prev_log_index,
@@ -188,6 +206,8 @@ class RaftNode:
             print(message["type"])
             if message["type"] == "request_vote":
                 self.handle_request_vote(message)
+            # elif message["type"] == "vote":
+            #     self.handle_req(message)
             elif message["type"] == "request_vote_response":
                 self.handle_request_vote_response(message)
             elif message["type"] == "append_entries":
@@ -200,50 +220,50 @@ class RaftNode:
 
     def handle_append_entries(self, message):
         response = {
-            "src_ip": self.ip,
-            "dst_ip": message["src_ip"],
+            "src_port": self.port,
+            "dst_port": message["src_port"],
             "type": "append_entries_response",
             "term": self.current_term,
             "success": False
         }
         if message["term"] < self.current_term:
             # Deny append entries if leader term is less than current term
-            self.send_message(response, message["src_ip"])
+            self.send_message(response, message["src_port"])
             return
         if len(self.log) <= message["prev_log_index"] or self.log[message["prev_log_index"]]["term"] != message["prev_log_term"]:
             # Deny append entries if previous log doesn't match
-            self.send_message(response, message["src_ip"])
+            self.send_message(response, message["src_port"])
             return
         self.cancel_election_timer()
         self.start_election_timer()
         self.state = "follower"
-        self.leader_ip = message["src_ip"]
+        self.leader_port = message["src_port"]
         self.commit_index = min(message["leader_commit"], len(self.log) - 1)
         if len(message["entries"]) > 0:
             self.log = self.log[:message["prev_log_index"] + 1] + message["entries"]
-        self.send_message(response, message["src_ip"])
+        self.send_message(response, message["src_port"])
 
     def handle_append_entries_response(self, message):
         if message["term"] != self.current_term:
             return
         if message["success"]:
-            self.match_index[message["src_ip"]] = len(self.log) - 1
-            self.next_index[message["src_ip"]] = len(self.log)
-            num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.ip])
+            self.match_index[message["src_port"]] = len(self.log) - 1
+            self.next_index[message["src_port"]] = len(self.log)
+            num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
             if num_votes > len(self.peers) // 2:
                 self.commit_index += 1
         else:
-            self.next_index[message["src_ip"]] -= 1
+            self.next_index[message["src_port"]] -= 1
         self.cancel_election_timer()
         self.start_election_timer()
 
     def send_heartbeat(self):
         for peer in self.peers:
-            if peer == self.ip:
+            if peer == self.port:
                 continue
             message = {
-                "src_ip": self.ip,
-                "dst_ip": peer,
+                "src_port": self.port,
+                "dst_port": peer,
                 "type": "heartbeat",
                 "term": self.current_term,
                 "leader_commit": self.commit_index
@@ -256,7 +276,7 @@ class RaftNode:
             return
         self.cancel_election_timer()
         self.start_election_timer()
-        self.leader_ip = message["src_ip"]
+        self.leader_port = message["src_port"]
         self.commit_index = min(message["leader_commit"], len(self.log) - 1)
 
     def run(self):

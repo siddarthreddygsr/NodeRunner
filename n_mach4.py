@@ -11,6 +11,7 @@ node_ports: List[str] = ['5000', '5001', '5002', '5003', '5004']
 # create a node for each IP address
 for port in node_ports:
     node = RaftNode('127.0.0.1', port,  node_ports, 10, 20, 5)
+    node.log.append({'term': 1, 'value': f'log entry from node {port}'})
     nodes.append(node)
 
 # for node in nodes:

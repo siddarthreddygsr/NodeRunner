@@ -15,6 +15,8 @@ for port in node_ports:
     nodes.append(node)
 
 # for node in nodes:
+#     print(node.port)
+# for node in nodes:
 #     node.run()
 # print("Nope")
 # nodes[0].run()

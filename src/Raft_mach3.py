@@ -1,14 +1,14 @@
-from flask import Flask, request
+from fastapi import FastAPI, Request
 import requests
 import json
 import threading
 import random
 
-app = Flask(__name__)
+app = FastAPI()
 
 
 class RaftNode:
-    def __init__(self, ip, port,  peers, election_timeout_min, election_timeout_max, heartbeat_interval):
+    def _init_(self, ip, port,  peers, election_timeout_min, election_timeout_max, heartbeat_interval):
         self.ip = ip
         self.port = port
         self.peers = peers
@@ -29,7 +29,6 @@ class RaftNode:
         self.vote_count = 0
 
     def send_message(self, message, dest_port):
-        # print(message)
         payload = {
             "src_port": self.port,
             "message": message
@@ -44,16 +43,46 @@ class RaftNode:
         else:
             print(f"Message sent to {dest_port}")
 
+    async def handle_message(self, message):
+        try:
+            print("message")
+            print(message["type"])
+            if message["type"] == "request_vote":
+                self.handle_request_vote(message)
+            elif message["type"] == "request_vote_response":
+                self.handle_request_vote_response(message)
+            elif message["type"] == "append_entries":
+                self.handle_append_entries(message)
+            elif message["type"] == "append_entries_response":
+                self.handle_append_entries_response(message)
+        except:
+            print(f"Received unknown message type: {message}\n")
+            return {"status": "error", "message": f"Unknown message type: {message}"}
+
+    async def receive_message(self, request: Request):
+        message = await request.json()
+        src_port = message['src_port']
+        message = message['message']
+        print(f"Received message from {src_port}: {message}")
+        await self.handle_message(message)
+        return {"status": "OK"}
+
+    @app.post('/appendEntries')
+    async def append_entries_endpoint(self, request: Request):
+        message = await request.json()
+        src_port = message['src_port']
+        message = message['message']
+        print(f"Received appendEntries message from {src_port}: {message}")
+        await self.handle_append_entries(message)
+        return {"status": "OK"}
     def listen(self):
-        @app.route('/message', methods=['POST'])
-        def receive_message():
-            message = request.get_json()['message']
-            src_port = request.get_json()['src_port']
-            print(f"Received message from {src_port}: {message}")
-            self.handle_message(message)
-            return "OK", 200
-        
-        app.run(host=self.ip, port=self.port,debug=True)
+        @app.post('/message')
+        async def endpoint(request: Request):
+            response = await self.receive_message(request)
+            return response
+
+        import uvicorn
+        uvicorn.run(app, host=self.ip, port=self.port)
 
 
     def start_election_timer(self):
@@ -85,7 +114,7 @@ class RaftNode:
 
     def request_votes(self):
         print(f"Node {self.port}: Requesting votes")
-        num_votes = 1
+        self.vote_count = 1
         for peer in self.peers:
             if peer == self.port:
                 continue
@@ -112,34 +141,15 @@ class RaftNode:
             # Deny vote if candidate term is less than current term
             self.send_message(response, message["src_port"])
             return
-        # print("HI")
         if self.voted_for is None or self.voted_for == message["src_port"]:
-            # print(self.log[-1]["term"])
-            # print(message["last_log_term"])
-            # print(len(self.log))
-            # print(message["last_log_index"])
             # Grant vote if we haven't voted or if we have already voted for this candidate
             if self.log[-1]["term"] <= message["last_log_term"] and len(self.log) - 1 <= message["last_log_index"]:
-                # print("Hello again")
                 # Grant vote if candidate's log is at least as up-to-date as our log
                 response["vote_granted"] = True
                 print("Yes! Voted True")
                 self.voted_for = message["src_port"]
-                # print("Hi HI")
-                # print(message["src_port"])
         self.send_message(response, message["src_port"])
 
-    # def handle_vote(self, message):
-    #     if message["term"] != self.current_term:
-    #         return
-    #     if message["vote_granted"]:
-    #         num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
-    #         if num_votes > len(self.peers) // 2:
-    #             self.state = "leader"
-    #             self.leader_port = self.port
-    #             self.cancel_election_timer()
-    #             self.start_heartbeat_timer()
-    #             self.send_append_entries()
     
     def handle_request_vote_response(self, message):
         # Check if the response is for the current term
@@ -147,20 +157,15 @@ class RaftNode:
         print(self.current_term)
         if message['term'] != self.current_term:
             return
-
-        # Check if the response is from a valid candidate
         candidate_id = message['src_port']
         if candidate_id not in self.peers:
             return
 
-        # print("Hi")
-        # Check if the candidate has already voted in this term
         if candidate_id in self.voted_for:
             return
         print(message)
         if message["vote_granted"]:
             print("vote_granted")
-            # num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
             self.vote_count += 1
             print(self.vote_count)
             if self.vote_count > len(self.peers) // 2:
@@ -169,15 +174,6 @@ class RaftNode:
                 self.cancel_election_timer()
                 self.start_heartbeat_timer()
                 self.send_append_entries()
-        # # Check if the candidate has granted its vote
-        # if message['vote_granted']:
-        #     self.vote_count += 1
-        #     if self.vote_count > len(self.peers) // 2:
-        #         # The node has received enough votes to become leader
-        #         self.become_leader()
-        # else:
-        #     # The candidate did not grant its vote
-        #     pass  # Handle the case where a candidate did not grant its vote
 
 
     def send_append_entries(self):
@@ -198,26 +194,11 @@ class RaftNode:
                 "leader_commit": self.commit_index
             }
             self.send_message(message, peer)
-
-
-    def handle_message(self, message):
-        try:
-            print("message")
-            print(message["type"])
-            if message["type"] == "request_vote":
-                self.handle_request_vote(message)
-            # elif message["type"] == "vote":
-            #     self.handle_req(message)
-            elif message["type"] == "request_vote_response":
-                self.handle_request_vote_response(message)
-            elif message["type"] == "append_entries":
-                self.handle_append_entries(message)
-            elif message["type"] == "append_entries_response":
-                self.handle_append_entries_response(message)
-        except:
-            print(f"Received unknown message type: {message}\n")
-            return {"status": "error", "message": f"Unknown message type: {message}"}
-
+    @app.route('/executeCommand', methods=['POST'])
+    def my_endpoint():
+        data = requests.json
+        return {'status': 'success'}, 200
+    
     def handle_append_entries(self, message):
         response = {
             "src_port": self.port,
@@ -249,8 +230,8 @@ class RaftNode:
         if message["success"]:
             self.match_index[message["src_port"]] = len(self.log) - 1
             self.next_index[message["src_port"]] = len(self.log)
-            num_votes = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
-            if num_votes > len(self.peers) // 2:
+            self.vote_count = sum([1 for peer in self.peers if self.match_index[peer] >= self.commit_index and peer != self.port])
+            if self.vote_count > len(self.peers) // 2:
                 self.commit_index += 1
         else:
             self.next_index[message["src_port"]] -= 1
@@ -268,7 +249,6 @@ class RaftNode:
                 "term": self.current_term,
                 "leader_commit": self.commit_index
             }
-            
             self.send_message(message, peer)
 
     def handle_heartbeat(self, message):
@@ -279,7 +259,3 @@ class RaftNode:
         self.start_election_timer()
         self.leader_port = message["src_port"]
         self.commit_index = min(message["leader_commit"], len(self.log) - 1)
-
-    def run(self):
-        self.start_election_timer()
-        self.listen()
